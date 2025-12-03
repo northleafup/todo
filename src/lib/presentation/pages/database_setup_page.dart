@@ -103,7 +103,8 @@ class _DatabaseSetupPageState extends State<DatabaseSetupPage>
     setState(() => _isLoading = true);
 
     try {
-      await DatabaseConfigService.selectDatabaseDirectory();
+      // 直接保存用户选择的路径，不再弹出选择对话框
+      await DatabaseConfigService.saveDatabaseDirectory(_selectedPath!);
 
       if (!mounted) return;
 

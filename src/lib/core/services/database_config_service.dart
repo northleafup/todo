@@ -44,23 +44,32 @@ class DatabaseConfigService {
       );
 
       if (selectedDirectory != null) {
-        // 验证目录是否可写
-        final testFile = File(path.join(selectedDirectory, '.test'));
-        try {
-          await testFile.writeAsString('test');
-          await testFile.delete();
-
-          // 保存选择的路径
-          await SecureStorage.setString(_dbPathKey, selectedDirectory);
-          return selectedDirectory;
-        } catch (e) {
-          throw Exception('选择的目录不可写: $e');
-        }
+        return await saveDatabaseDirectory(selectedDirectory);
       }
 
       return null;
     } catch (e) {
       throw Exception('选择目录失败: $e');
+    }
+  }
+
+  /// 直接保存数据库目录路径
+  static Future<String> saveDatabaseDirectory(String directoryPath) async {
+    try {
+      // 验证目录是否可写
+      final testFile = File(path.join(directoryPath, '.test'));
+      try {
+        await testFile.writeAsString('test');
+        await testFile.delete();
+
+        // 保存选择的路径
+        await SecureStorage.setString(_dbPathKey, directoryPath);
+        return directoryPath;
+      } catch (e) {
+        throw Exception('选择的目录不可写: $e');
+      }
+    } catch (e) {
+      throw Exception('保存目录失败: $e');
     }
   }
 
