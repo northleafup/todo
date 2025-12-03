@@ -268,5 +268,6 @@ outputs/
 build/
 dist/
 
-# Keep releases directory for published artifacts
-!releases/
+# Keep releases directory for published artifacts but ignore its contents
+releases/*
+!releases/.gitkeep
