@@ -1,0 +1,315 @@
+name: 🏗️ Build Cross-Platform Installers
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - macos
+        - linux
+        - android
+
+env:
+  APP_NAME: 美丽的待办事项
+  APP_IDENTIFIER: com.beautifultodo.todo
+  VERSION: 1.0.0
+
+jobs:
+  # macOS 构建任务
+  build-macos:
+    runs-on: macos-latest
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos' || github.event.inputs.platform == ''
+
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+
+    - name: 🍎 设置 Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: 🐦 设置 Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+
+    - name: 📦 安装 CocoaPods
+      run: |
+        cd macos
+        pod install
+
+    - name: 🔍 验证 Flutter 环境
+      run: flutter doctor
+
+    - name: 📥 获取依赖
+      run: flutter pub get
+
+    - name: 🍎 构建 macOS 应用
+      run: |
+        mkdir -p build/installers
+        flutter build macos --release
+
+    - name: 📦 创建 DMG 安装包
+      run: |
+        DMG_NAME="${APP_NAME}-${VERSION}.dmg"
+        DMG_PATH="build/installers/${DMG_NAME}"
+
+        # 创建临时目录
+        TEMP_DMG_DIR="/tmp/todo_dmg"
+        rm -rf "$TEMP_DMG_DIR"
+        mkdir -p "$TEMP_DMG_DIR"
+
+        # 复制应用到临时目录
+        cp -r "build/macos/Build/Products/Release/todo.app" "$TEMP_DMG_DIR/"
+
+        # 创建 Applications 链接
+        ln -s /Applications "$TEMP_DMG_DIR/Applications"
+
+        # 创建 DMG
+        hdiutil create -volname "$APP_NAME" \
+                       -srcfolder "$TEMP_DMG_DIR" \
+                       -ov \
+                       -format UDZO \
+                       "$DMG_PATH"
+
+        # 清理
+        rm -rf "$TEMP_DMG_DIR"
+
+        echo "DMG_PACKAGE=$DMG_PATH" >> $GITHUB_ENV
+
+    - name: 📤 上传 macOS 构件
+      uses: actions/upload-artifact@v3
+      with:
+        name: macos-installer
+        path: build/installers/*.dmg
+        retention-days: 30
+
+  # Linux 构建任务
+  build-linux:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'linux' || github.event.inputs.platform == ''
+
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+
+    - name: 🐧 安装 Linux 依赖
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          clang \
+          cmake \
+          ninja-build \
+          pkg-config \
+          libgtk-3-dev \
+          liblzma-dev \
+          libstdc++-12-dev \
+          dpkg-dev \
+          libappindicator3-dev \
+          dpkg
+
+    - name: 🐦 设置 Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+
+    - name: 🔍 验证 Flutter 环境
+      run: flutter doctor
+
+    - name: 📥 获取依赖
+      run: flutter pub get
+
+    - name: 🐧 构建 Linux 应用
+      run: |
+        mkdir -p build/installers
+        flutter build linux --release
+
+    - name: 📦 创建 DEB 安装包
+      run: |
+        DEB_NAME="${APP_IDENTIFIER}_${VERSION}-1_amd64.deb"
+        DEB_PATH="build/installers/${DEB_NAME}"
+
+        # 创建 DEB 包结构
+        DEB_DIR="/tmp/todo_deb"
+        rm -rf "$DEB_DIR"
+        mkdir -p "$DEB_DIR/DEBIAN"
+        mkdir -p "$DEB_DIR/opt/todo"
+        mkdir -p "$DEB_DIR/usr/share/applications"
+        mkdir -p "$DEB_DIR/usr/share/icons/hicolor/256x256/apps"
+        mkdir -p "$DEB_DIR/usr/bin"
+
+        # 复制应用文件
+        cp -r "build/linux/x64/release/bundle/"* "$DEB_DIR/opt/todo/"
+
+        # 创建 desktop 文件
+        cat > "$DEB_DIR/usr/share/applications/todo.desktop" << EOF
+        [Desktop Entry]
+        Name=$APP_NAME
+        Comment=简洁高效的任务管理工具
+        Exec=/opt/todo/todo
+        Icon=todo
+        Terminal=false
+        Type=Application
+        Categories=Office;Productivity;
+        EOF
+
+        # 创建启动脚本
+        cat > "$DEB_DIR/usr/bin/todo" << 'EOF'
+        #!/bin/bash
+        cd /opt/todo
+        ./todo "$@"
+        EOF
+        chmod +x "$DEB_DIR/usr/bin/todo"
+
+        # 创建 control 文件
+        cat > "$DEB_DIR/DEBIAN/control" << EOF
+        Package: $APP_IDENTIFIER
+        Version: $VERSION-1
+        Section: office
+        Priority: optional
+        Architecture: amd64
+        Depends: libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, libatspi2.0-0, libdrm2, libxcomposite1, libxdamage1, libxrandr2, libgbm1, libxkbcommon0, libasound2
+        Maintainer: Beautiful Todo <support@beautifultodo.com>
+        Description: $APP_NAME
+         简洁高效的任务管理工具
+        EOF
+
+        # 创建卸载脚本
+        cat > "$DEB_DIR/DEBIAN/postrm" << 'EOF'
+        #!/bin/bash
+        if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+            rm -rf /opt/todo
+            rm -f /usr/bin/todo
+            rm -f /usr/share/applications/todo.desktop
+            rm -f /usr/share/icons/hicolor/256x256/apps/todo.png
+            update-desktop-database
+        fi
+        EOF
+        chmod +x "$DEB_DIR/DEBIAN/postrm"
+
+        # 计算 installed size
+        INSTALLED_SIZE=$(du -s "$DEB_DIR" | cut -f1)
+        echo "Installed-Size: $INSTALLED_SIZE" >> "$DEB_DIR/DEBIAN/control"
+
+        # 构建 DEB 包
+        dpkg-deb --build "$DEB_DIR" "$DEB_PATH"
+
+        # 清理
+        rm -rf "$DEB_DIR"
+
+        echo "DEB_PACKAGE=$DEB_PATH" >> $GITHUB_ENV
+
+    - name: 📤 上传 Linux 构件
+      uses: actions/upload-artifact@v3
+      with:
+        name: linux-installer
+        path: build/installers/*.deb
+        retention-days: 30
+
+  # Android 构建任务
+  build-android:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'android' || github.event.inputs.platform == ''
+
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+
+    - name: 🤖 设置 Java JDK
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: 🐦 设置 Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+
+    - name: 🔍 验证 Flutter 环境
+      run: flutter doctor
+
+    - name: 📥 获取依赖
+      run: flutter pub get
+
+    - name: 🤖 构建 Android APK
+      run: |
+        mkdir -p build/installers
+        flutter build apk --release
+
+        # 重命名 APK
+        APK_NAME="${APP_NAME}-${VERSION}.apk"
+        cp "build/app/outputs/flutter-apk/app-release.apk" "build/installers/${APK_NAME}"
+
+    - name: 🤖 构建 Android App Bundle
+      run: |
+        flutter build appbundle --release
+
+        # 重命名 AAB
+        AAB_NAME="${APP_NAME}-${VERSION}.aab"
+        cp "build/app/outputs/bundle/release/app-release.aab" "build/installers/${AAB_NAME}"
+
+    - name: 📤 上传 Android 构件
+      uses: actions/upload-artifact@v3
+      with:
+        name: android-installer
+        path: build/installers/*
+        retention-days: 30
+
+  # 创建 Release
+  create-release:
+    needs: [build-macos, build-linux, build-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+
+    - name: 📥 下载所有构件
+      uses: actions/download-artifact@v3
+
+    - name: 📋 创建 Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: "${APP_NAME} v${VERSION}"
+        body: |
+          ## 🎉 ${APP_NAME} v${VERSION} 发布
+
+          ### 📦 安装包下载
+
+          #### 🍎 macOS
+          - **DMG 安装包**: 包含完整的卸载程序，支持拖拽安装
+
+          #### 🐧 Linux
+          - **DEB 包**: 适用于 Ubuntu/Debian 系统，包含卸载脚本
+
+          #### 🤖 Android
+          - **APK**: 适用于直接安装
+          - **AAB**: 适用于 Google Play Store
+
+          ### 🔧 安装说明
+          详细安装说明请查看 [BUILD_GUIDE.md](./BUILD_GUIDE.md)
+
+          ### 🐛 问题反馈
+          如遇问题请在 Issues 页面反馈
+
+        files: |
+          macos-installer/*.dmg
+          linux-installer/*.deb
+          android-installer/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
