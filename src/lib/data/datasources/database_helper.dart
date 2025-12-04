@@ -22,16 +22,39 @@ class DatabaseHelper {
 
       print('数据库路径: $path'); // 调试信息
 
-      return await openDatabase(
-        path,
-        version: _databaseVersion,
-        onCreate: _createTables,
-        onUpgrade: _onUpgrade,
-        onOpen: _onOpen,
-      );
+      // 尝试使用更兼容的数据库初始化方式
+      Database db;
+      try {
+        db = await openDatabase(
+          path,
+          version: _databaseVersion,
+          onCreate: _createTables,
+          onUpgrade: _onUpgrade,
+          onOpen: _onOpen,
+        );
+      } catch (e) {
+        print('标准数据库初始化失败，尝试备用方案: $e');
+        // 备用方案：使用更简单的数据库配置
+        final dbPath = await _getFallbackDatabasePath();
+        db = await openDatabase(
+          dbPath,
+          version: _databaseVersion,
+          onCreate: _createTables,
+          onUpgrade: _onUpgrade,
+          onOpen: _onOpen,
+        );
+      }
+
+      return db;
     } catch (e) {
       throw app_exceptions.DatabaseException('Failed to initialize database: $e');
     }
+  }
+
+  // 备用数据库路径
+  Future<String> _getFallbackDatabasePath() async {
+    final dbDir = await getDatabasesPath();
+    return join(dbDir, _databaseName);
   }
 
   Future<void> _onOpen(Database db) async {
